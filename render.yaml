@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: olx-deal-radar-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: ENABLE_WEB_SOURCES
+        value: "1"
+      - key: MAX_WORKERS
+        value: "5"
+      - key: CACHE_TTL_SECONDS
+        value: "900"

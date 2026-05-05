@@ -1,0 +1,48 @@
+engine:
+  min_comparable_items: 4
+  max_items_per_source: 35
+  max_workers: 5
+  min_similarity: 0.34
+  cache_ttl_seconds: 900
+  request_timeout_seconds: 14
+  request_delay_min_seconds: 0.35
+  request_delay_max_seconds: 1.25
+  default_region: Braga
+  default_min_profit_pct: 25
+  default_min_profit_eur: 30
+  default_fee_pct: 8
+  default_tax_pct: 0
+
+sources:
+  olx_pt:
+    enabled: true
+    reliability: 0.80
+    type: used_active
+  custojusto_pt:
+    enabled: true
+    reliability: 0.72
+    type: used_active
+  wallapop:
+    enabled: true
+    reliability: 0.66
+    type: used_active
+  kuantokusta:
+    enabled: true
+    reliability: 0.55
+    type: retail_reference
+  worten:
+    enabled: true
+    reliability: 0.52
+    type: retail_reference
+  ebay_browse:
+    enabled: true
+    reliability: 0.76
+    type: used_active
+  serpapi_ebay_sold:
+    enabled: true
+    reliability: 0.95
+    type: sold
+  ebay_html:
+    enabled: true
+    reliability: 0.50
+    type: used_active

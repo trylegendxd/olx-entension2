@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>OLX Deal Radar Options</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>OLX Deal Radar</h1>
+    <p class="muted">Set your Flask/Render backend URL. Example: <code>https://your-app.onrender.com/api/evaluate</code></p>
+
+    <form id="settings-form">
+      <label>
+        Backend API URL
+        <input id="apiUrl" type="url" placeholder="https://your-app.onrender.com/api/evaluate">
+      </label>
+
+      <label>
+        API token
+        <input id="apiToken" type="password" placeholder="same as DEAL_RADAR_API_TOKEN">
+      </label>
+
+      <div class="grid">
+        <label>
+          Minimum resale margin %
+          <input id="minProfitPct" type="number" min="0" step="1">
+        </label>
+        <label>
+          Minimum profit €
+          <input id="minimumProfitEuro" type="number" min="0" step="1">
+        </label>
+        <label>
+          Fees %
+          <input id="feePct" type="number" min="0" step="0.5">
+        </label>
+        <label>
+          Tax %
+          <input id="taxPct" type="number" min="0" step="0.5">
+        </label>
+      </div>
+
+      <div class="grid">
+        <label>
+          Preferred region
+          <input id="preferredRegion" type="text" placeholder="Braga">
+        </label>
+        <label>
+          Max distance km
+          <input id="maxDistanceKm" type="number" min="0" step="1" placeholder="optional">
+        </label>
+      </div>
+
+      <label>
+        Mode
+        <select id="mode">
+          <option value="resale">Resale focused</option>
+          <option value="personal">Personal good-deal focused</option>
+        </select>
+      </label>
+
+      <button type="submit">Save settings</button>
+      <p id="status"></p>
+    </form>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

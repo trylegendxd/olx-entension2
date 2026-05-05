@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "OLX Deal Radar",
+  "description": "Scans OLX listings and uses a multi-source backend to detect resale deals.",
+  "version": "2.0.0",
+  "minimum_chrome_version": "109",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://www.olx.pt/*",
+    "https://olx.pt/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://*.onrender.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.olx.pt/d/anuncio/*", "https://olx.pt/d/anuncio/*"],
+      "js": ["src/content.js"],
+      "css": ["src/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "OLX Deal Radar",
+    "default_popup": "src/popup.html"
+  },
+  "options_page": "src/options.html"
+}
