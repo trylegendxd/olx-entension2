@@ -15,6 +15,9 @@ class ProductProfile:
     must_have_tokens: List[str] = field(default_factory=list)
     excluded_tokens: List[str] = field(default_factory=list)
     condition_hint: str = "unknown"
+    min_price: Optional[float] = None
+    max_price: Optional[float] = None
+    exact_match_required: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -304,7 +304,7 @@
         ${metric("Retail median", money(result.retailMedian))}
         ${metric("Profit", money(result.estimatedProfit))}
         ${metric("Margin", pct(result.profitPct))}
-        ${metric("Samples", result.sampleSize ?? "—")}
+        ${metric("Used samples", result.usedSampleSize ?? "—")}
         ${metric("Below market", pct(result.belowMarketPct))}
       </div>
 
@@ -325,7 +325,8 @@
     const info = [
       source.status,
       source.sampleSize != null ? `${source.sampleSize} items` : "",
-      source.median != null ? `median ${money(source.median)}` : ""
+      source.median != null ? `median ${money(source.median)}` : "",
+      source.error ? String(source.error).slice(0, 70) : ""
     ].filter(Boolean).join(" • ");
 
     return `

@@ -7,7 +7,7 @@ import requests
 
 from .base import MarketplaceFetcher, q
 from ..models import ComparableItem, SourceResult
-from ..text import normalize_space, simple_similarity
+from ..text import exact_model_match, excluded_model_match, normalize_space, simple_similarity
 
 
 class EbayBrowseFetcher(MarketplaceFetcher):
@@ -72,7 +72,11 @@ class EbayBrowseFetcher(MarketplaceFetcher):
                 except Exception:
                     continue
 
-                if not self.plausible_price(price, listing.get("priceValue")):
+                if not self.plausible_price(price, listing.get("priceValue"), profile=profile):
+                    continue
+                if profile.exact_match_required and not exact_model_match(title, profile.must_have_tokens):
+                    continue
+                if excluded_model_match(title, profile.excluded_tokens):
                     continue
 
                 item = ComparableItem(
@@ -176,7 +180,11 @@ class SerpApiEbaySoldFetcher(MarketplaceFetcher):
             for row in rows:
                 title = row.get("title") or row.get("name") or ""
                 price = self._extract_price(row)
-                if price is None or not self.plausible_price(price, listing.get("priceValue")):
+                if price is None or not self.plausible_price(price, listing.get("priceValue"), profile=profile):
+                    continue
+                if profile.exact_match_required and not exact_model_match(title, profile.must_have_tokens):
+                    continue
+                if excluded_model_match(title, profile.excluded_tokens):
                     continue
 
                 item = self.make_item(

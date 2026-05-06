@@ -7,7 +7,9 @@ from .cache import TTLCache
 from .models import ComparableItem, SourceResult
 from .query import QueryBuilder
 from .stats import coefficient_of_variation, trim_iqr, weighted_median
-from .text import detect_bad_words, simple_similarity
+from .text import detect_bad_words, exact_model_match, excluded_model_match, simple_similarity
+from .marketplaces.api_sources import OlxApiFetcher, WallapopApiFetcher
+from .marketplaces.search_fallback import DuckDuckGoSearchFetcher
 from .marketplaces.html_sources import (
     CustoJustoFetcher,
     KuantoKustaFetcher,
@@ -29,6 +31,8 @@ class DealRadarEngine:
             max_size=512,
         )
         self.fetcher_classes = [
+            OlxApiFetcher,
+            WallapopApiFetcher,
             OlxFetcher,
             CustoJustoFetcher,
             WallapopFetcher,
@@ -37,6 +41,7 @@ class DealRadarEngine:
             EbayBrowseFetcher,
             SerpApiEbaySoldFetcher,
             EbayHtmlFetcher,
+            DuckDuckGoSearchFetcher,
         ]
 
     def describe_sources(self) -> Dict[str, Any]:
@@ -76,7 +81,7 @@ class DealRadarEngine:
         profile = self.query_builder.build(title, description)
         risk_flags = sorted(set((listing.get("riskyWords") or []) + detect_bad_words(f"{title}\n{description}")))
 
-        cache_key = f"{profile.query}|{round(price, 2)}|{client_settings.get('mode', 'resale')}"
+        cache_key = f"v4|{profile.query}|{round(price, 2)}|{client_settings.get('mode', 'resale')}"
         cached = self.cache.get(cache_key)
         if cached:
             cached["cacheHit"] = True
@@ -105,7 +110,6 @@ class DealRadarEngine:
         result["cacheHit"] = False
         result["evaluatedInMs"] = int((time.perf_counter() - started) * 1000)
 
-        # Do not cache fatal/empty noise too aggressively? Still cache briefly through TTL.
         self.cache.set(cache_key, result)
         return result
 
@@ -115,7 +119,7 @@ class DealRadarEngine:
             settings = self.source_settings.get(cls.source_id, {})
             fetchers.append(cls(self.engine_settings, settings))
 
-        max_workers = int(self.engine_settings.get("max_workers", 5))
+        max_workers = int(self.engine_settings.get("max_workers", 7))
         max_workers = max(1, min(max_workers, len(fetchers)))
 
         results: List[SourceResult] = []
@@ -156,29 +160,39 @@ class DealRadarEngine:
                 if item.price is None or item.price <= 0:
                     continue
 
-                # Normalize final similarity against the cleaned listing query.
+                if profile.min_price is not None and item.price < float(profile.min_price):
+                    continue
+                if profile.max_price is not None and item.price > float(profile.max_price):
+                    continue
+
+                if profile.exact_match_required:
+                    if not exact_model_match(item.title, profile.must_have_tokens):
+                        continue
+                    if excluded_model_match(item.title, profile.excluded_tokens):
+                        continue
+
                 item.similarity = max(item.similarity, simple_similarity(profile.query, item.title, profile.must_have_tokens))
 
-                # Strongly downweight retail when estimating used resale.
                 if item.source_type == "retail_reference":
                     item.reliability *= 0.55
+                if item.source_type == "search_snippet":
+                    item.reliability *= 0.35
 
                 if item.currency == "USD":
-                    # Rough EUR approximation. For production, replace with cached FX API.
                     item.price = round(item.price * 0.92, 2)
                     item.currency = "EUR"
                     item.reliability *= 0.80
 
-                # Exclude obvious accessories/too-cheap comps.
                 if listing_price > 100 and item.price < listing_price * 0.15:
                     continue
+                if listing_price > 80 and item.price > listing_price * 5:
+                    continue
 
-                if item.similarity < float(self.engine_settings.get("min_similarity", 0.34)):
+                if item.similarity < float(self.engine_settings.get("min_similarity", 0.25)):
                     continue
 
                 items.append(item)
 
-        # Dedupe across sources.
         seen = set()
         deduped = []
         for item in items:
@@ -191,6 +205,8 @@ class DealRadarEngine:
         return deduped
 
     def _calculate_market(self, items: List[ComparableItem]) -> Dict[str, Any]:
+        min_items = int(self.engine_settings.get("min_comparable_items", 3))
+
         if not items:
             return {
                 "median": None,
@@ -201,43 +217,65 @@ class DealRadarEngine:
                 "retailSampleSize": 0,
                 "confidence": "low",
                 "spread": None,
+                "trusted": False,
+                "reason": "No comparable items passed filtering.",
             }
 
-        used = [item for item in items if item.source_type in ("used_active", "sold")]
+        used = [item for item in items if item.source_type in ("used_active", "sold", "search_snippet")]
         retail = [item for item in items if item.source_type == "retail_reference"]
 
         used_prices = trim_iqr([item.price for item in used])
         retail_prices = trim_iqr([item.price for item in retail])
 
+        used_count = len(used_prices)
+        retail_count = len(retail_prices)
+        sample_size = used_count + retail_count
+
+        # Critical fix: do not publish a median/profit from 1-2 scraped prices.
+        if used_count < min_items:
+            retail_median = weighted_median([
+                (item.price, item.reliability * max(0.40, item.similarity))
+                for item in retail
+                if item.price in retail_prices
+            ]) if retail_count >= min_items else None
+
+            return {
+                "median": None,
+                "usedMedian": None,
+                "retailMedian": round(retail_median, 2) if retail_median is not None else None,
+                "sampleSize": sample_size,
+                "usedSampleSize": used_count,
+                "retailSampleSize": retail_count,
+                "confidence": "low",
+                "spread": None,
+                "trusted": False,
+                "reason": f"Only {used_count} used-market comparable(s). Need at least {min_items}.",
+            }
+
         weighted_pairs: List[Tuple[float, float]] = []
-        for item in items:
-            if item.price in used_prices or item.price in retail_prices:
-                source_type_weight = 1.25 if item.source_type == "sold" else 1.0
-                if item.source_type == "retail_reference":
-                    source_type_weight = 0.45
+        for item in used:
+            if item.price in used_prices:
+                source_type_weight = 1.35 if item.source_type == "sold" else 1.0
+                if item.source_type == "search_snippet":
+                    source_type_weight = 0.25
                 weight = item.reliability * source_type_weight * max(0.40, item.similarity)
                 weighted_pairs.append((item.price, weight))
 
-        median = weighted_median(weighted_pairs)
-        used_median = weighted_median([
-            (item.price, item.reliability * max(0.40, item.similarity))
-            for item in used
-            if item.price in used_prices
-        ])
+        # Retail is only a reference, never the main used-market valuation.
         retail_median = weighted_median([
             (item.price, item.reliability * max(0.40, item.similarity))
             for item in retail
             if item.price in retail_prices
-        ])
+        ]) if retail_count >= min_items else None
 
-        used_count = len(used_prices)
-        retail_count = len(retail_prices)
-        sample_size = used_count + retail_count
-        spread = coefficient_of_variation(used_prices or [p for p, _ in weighted_pairs])
+        used_median = weighted_median(weighted_pairs)
+        median = used_median
+
+        spread = coefficient_of_variation(used_prices)
 
         if used_count >= 10 and spread is not None and spread < 0.28:
             confidence = "high"
-        elif used_count >= 5 or sample_size >= 8:
+        elif used_count >= 5:
             confidence = "medium"
         else:
             confidence = "low"
@@ -251,6 +289,8 @@ class DealRadarEngine:
             "retailSampleSize": retail_count,
             "confidence": confidence,
             "spread": round(spread, 3) if spread is not None else None,
+            "trusted": True,
+            "reason": None,
         }
 
     def _score(self, listing, profile, price, risk_flags, source_results, market, client_settings) -> Dict[str, Any]:
@@ -260,7 +300,7 @@ class DealRadarEngine:
         tax_pct = self._to_float(client_settings.get("taxPct")) or float(self.engine_settings.get("default_tax_pct", 0))
         mode = client_settings.get("mode", "resale")
 
-        market_price = market.get("usedMedian") or market.get("median")
+        market_price = market.get("usedMedian")
         sample_size = int(market.get("sampleSize") or 0)
         used_sample_size = int(market.get("usedSampleSize") or 0)
 
@@ -268,8 +308,8 @@ class DealRadarEngine:
         if risk_flags:
             warnings.append(f"Risk words found in listing: {', '.join(risk_flags)}.")
 
-        if sample_size < int(self.engine_settings.get("min_comparable_items", 4)):
-            warnings.append("Very small sample size. Treat result as low-confidence and manually verify.")
+        if not market.get("trusted"):
+            warnings.append(market.get("reason") or "Not enough trusted comparable items.")
 
         failed = [r for r in source_results if r.status in ("blocked", "error")]
         if failed:
@@ -277,26 +317,24 @@ class DealRadarEngine:
 
         if profile.condition_hint == "for_parts":
             warnings.append("Listing appears to be damaged/for-parts. Resale value is much harder to estimate.")
+        elif profile.condition_hint == "mining_risk":
+            warnings.append("Listing mentions mining/mineração. Inspect temps, warranty, artifacts and stress-test before buying.")
 
-        if market_price is None:
+        estimated_profit = None
+        profit_pct = None
+        below_market_pct = None
+
+        if market_price is None or not market.get("trusted"):
             verdict = "UNKNOWN"
-            summary = "No reliable comparable market price found. Manual verification required."
-            estimated_profit = None
-            profit_pct = None
-            below_market_pct = None
+            summary = "Not enough reliable comparable prices. I am not calculating profit from 1-2 random scraped prices."
         else:
             estimated_sale_after_costs = market_price * (1 - (fee_pct + tax_pct) / 100)
             estimated_profit = round(estimated_sale_after_costs - price, 2)
             profit_pct = round((estimated_profit / price) * 100, 1) if price > 0 else None
             below_market_pct = round((1 - price / market_price) * 100, 1) if market_price > 0 else None
 
-            if risk_flags and profile.condition_hint != "new_or_like_new":
+            if "avariado" in risk_flags or "danificado" in risk_flags or "não funciona" in risk_flags or "nao funciona" in risk_flags or "peças" in risk_flags or "pecas" in risk_flags:
                 verdict = "AVOID"
-            elif used_sample_size < 3 and market.get("retailMedian"):
-                if price <= market["retailMedian"] * 0.55:
-                    verdict = "GOOD_DEAL"
-                else:
-                    verdict = "UNKNOWN"
             elif estimated_profit >= min_profit_eur and profit_pct is not None and profit_pct >= min_profit_pct and below_market_pct is not None and below_market_pct >= 18:
                 verdict = "RESALE_BUY"
             elif below_market_pct is not None and below_market_pct >= 12:
@@ -309,7 +347,7 @@ class DealRadarEngine:
             if mode == "personal" and verdict == "RESALE_BUY":
                 verdict = "GOOD_DEAL"
 
-            summary = self._summary(verdict, below_market_pct, estimated_profit, sample_size, market)
+            summary = self._summary(verdict, below_market_pct, estimated_profit, used_sample_size, market)
 
         manual_links = self._manual_links(profile.query)
 
@@ -336,15 +374,13 @@ class DealRadarEngine:
             "listing": listing,
         }
 
-    def _summary(self, verdict, below_market_pct, estimated_profit, sample_size, market) -> str:
+    def _summary(self, verdict, below_market_pct, estimated_profit, used_sample_size, market) -> str:
         if verdict == "RESALE_BUY":
-            return f"Strong resale candidate: about {below_market_pct:.1f}% below used-market median, estimated profit around €{estimated_profit:.0f} from {sample_size} comps."
+            return f"Strong resale candidate: about {below_market_pct:.1f}% below used-market median, estimated profit around €{estimated_profit:.0f} from {used_sample_size} used comps."
         if verdict == "GOOD_DEAL":
-            if estimated_profit is not None:
-                return f"Good deal: about {below_market_pct:.1f}% below estimated market value, but resale margin may not be huge after fees."
-            return "Good personal deal versus retail reference, but used-market data is weak."
+            return f"Good deal: about {below_market_pct:.1f}% below estimated used-market value, but resale margin may not be huge after fees."
         if verdict == "FAIR":
-            return f"Fair price: close to the estimated market value from {sample_size} comparable results."
+            return f"Fair price: close to the estimated used-market value from {used_sample_size} comparable results."
         if verdict == "AVOID":
             return "Avoid or inspect very carefully: risk/price does not justify buying for resale."
         return "Unknown: not enough reliable comparable data."

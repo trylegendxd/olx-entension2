@@ -115,3 +115,32 @@ def best_title_from_context(context: str, fallback: str) -> str:
     if 8 <= len(context) <= 140:
         return context
     return fallback
+
+
+def normalized_for_match(value: str) -> str:
+    value = strip_accents(clean_text(value)).lower()
+    value = value.replace("-", " ")
+    value = re.sub(r"\s+", " ", value)
+    return f" {value.strip()} "
+
+
+def contains_token_or_phrase(text: str, token: str) -> bool:
+    if not token:
+        return True
+    haystack = normalized_for_match(text)
+    needle = normalized_for_match(token).strip()
+    if " " in needle:
+        return f" {needle} " in haystack
+    return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack) is not None
+
+
+def exact_model_match(title: str, must_have_tokens) -> bool:
+    if not must_have_tokens:
+        return True
+    return all(contains_token_or_phrase(title, token) for token in must_have_tokens if token)
+
+
+def excluded_model_match(title: str, excluded_tokens) -> bool:
+    if not excluded_tokens:
+        return False
+    return any(contains_token_or_phrase(title, token) for token in excluded_tokens if token)

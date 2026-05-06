@@ -32,7 +32,7 @@ def require_auth():
 def home():
     return jsonify({
         "status": "ok",
-        "name": "OLX Deal Radar Backend",
+        "name": "OLX Deal Radar Backend v4",
         "endpoints": {
             "health": "/health",
             "evaluate": "/api/evaluate",
@@ -79,6 +79,54 @@ def evaluate():
     result = engine.evaluate(listing=listing, client_settings=client_settings)
     status = 200 if not result.get("fatalError") else 400
     return jsonify(result), status
+
+
+@app.get("/api/test-fetch")
+def test_fetch():
+    auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    title = request.args.get("title", "RTX 3080")
+    price = request.args.get("price", "360")
+    try:
+        price_value = float(price)
+    except Exception:
+        price_value = 360.0
+
+    listing = {
+        "title": title,
+        "priceValue": price_value,
+        "description": request.args.get("description", ""),
+        "url": "debug://test-fetch",
+    }
+    result = engine.evaluate(listing=listing, client_settings={
+        "minProfitPct": request.args.get("minProfitPct", 25),
+        "minimumProfitEuro": request.args.get("minimumProfitEuro", 30),
+        "feePct": request.args.get("feePct", 8),
+        "mode": "resale",
+    })
+
+    return jsonify({
+        "queryUsed": result.get("queryUsed"),
+        "verdict": result.get("verdict"),
+        "summary": result.get("summary"),
+        "sampleSize": result.get("sampleSize"),
+        "sources": [
+            {
+                "id": s.get("id"),
+                "name": s.get("name"),
+                "status": s.get("status"),
+                "sampleSize": s.get("sampleSize"),
+                "median": s.get("median"),
+                "error": s.get("error"),
+                "warnings": s.get("warnings"),
+                "searchedUrl": s.get("searchedUrl"),
+                "items": s.get("items", [])[:3],
+            }
+            for s in result.get("sources", [])
+        ],
+    })
 
 
 if __name__ == "__main__":

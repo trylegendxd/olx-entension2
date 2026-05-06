@@ -1,50 +1,28 @@
-# OLX Deal Radar Smart Repo
+# OLX Deal Radar Smart Repo v4
 
-Complete repo with:
+This version fixes the nonsense result where one bad parsed price like `18 500 €` could become the market median for a GPU.
 
-- `extension/` — Chrome/Edge Manifest V3 extension.
-- `backend/` — Flask backend for Render/local deployment.
-- Multi-source marketplace price fetching.
-- Smarter query cleaning and model extraction.
-- Per-source error isolation, so eBay/Wallapop/etc. blocking does not kill the whole evaluation.
-- Caching, outlier trimming, similarity filtering, risky-word detection, and resale scoring.
+## Critical fixes in v4
 
-## Architecture
+- **No median/profit from 1-2 items.**
+  - Backend now needs at least `min_comparable_items` used-market comps before showing used median/profit.
+- **Category-specific price sanity bounds.**
+  - Example: `RTX 3060 Ti` comps above roughly `480 €` are rejected.
+  - So `18 500 €` can no longer be accepted as a GPU comparison.
+- **Exact model matching for known products.**
+  - `RTX 3060 Ti` must contain `rtx`, `3060`, and `ti`.
+  - It will not compare against `RTX 3060`, `RTX 3070`, laptops, rigs, or random expensive listings.
+- **Regex fallback is now strict.**
+  - It no longer invents `title = query` around random prices.
+  - The price context must contain the exact model tokens.
+- **Retail is reference only.**
+  - Used-market valuation is not calculated from KuantoKusta/Worten retail prices alone.
+- **Better low-confidence behavior.**
+  - If only 1 item is found, result is `UNKNOWN`, not fake profit.
 
-```txt
-OLX listing page
-    ↓
-Browser extension content script extracts listing data
-    ↓
-Extension background worker sends POST /api/evaluate
-    ↓
-Flask backend searches multiple marketplaces
-    ↓
-Backend returns verdict + median + profit + source breakdown
-    ↓
-Extension overlay displays the decision
-```
+## Render setup
 
-## Backend sources included
-
-Enabled fetchers:
-
-- OLX Portugal active listings
-- CustoJusto active listings
-- Wallapop search
-- KuantoKusta retail reference
-- Worten retail reference
-- eBay Browse API active listings, if credentials are configured
-- SerpApi eBay sold listings, if `SERPAPI_KEY` is configured
-- eBay HTML fallback, best effort only and safely ignored if blocked
-
-Important: some marketplaces block automated requests. This backend is designed to **try multiple sources**, keep working when one fails, and tell you which sources succeeded/failed.
-
-## Deploy backend to Render
-
-Render should use the `backend` folder as root.
-
-Settings:
+Use:
 
 ```txt
 Root Directory: backend
@@ -52,16 +30,16 @@ Build Command: pip install -r requirements.txt
 Start Command: gunicorn app:app --bind 0.0.0.0:$PORT
 ```
 
-Environment variables:
+Env vars:
 
 ```txt
-DEAL_RADAR_API_TOKEN=choose-a-secret
+DEAL_RADAR_API_TOKEN=your-token
 ENABLE_WEB_SOURCES=1
-MAX_WORKERS=5
+MAX_WORKERS=7
 CACHE_TTL_SECONDS=900
 ```
 
-Optional API variables:
+Optional but recommended for reliable eBay/sold data:
 
 ```txt
 SERPAPI_KEY=your-serpapi-key
@@ -70,43 +48,37 @@ EBAY_CLIENT_SECRET=your-ebay-client-secret
 EBAY_MARKETPLACE_ID=EBAY_ES
 ```
 
-After deploy, your extension backend URL is:
+## Extension setup
+
+Load this folder in Chrome/Edge:
 
 ```txt
-https://your-render-service.onrender.com/api/evaluate
+extension
 ```
 
-## Install extension
-
-1. Go to `chrome://extensions`
-2. Enable Developer Mode.
-3. Click **Load unpacked**.
-4. Select the `extension` folder.
-5. Open extension Options.
-6. Put your backend URL:
-   `https://your-render-service.onrender.com/api/evaluate`
-7. Put the same API token as `DEAL_RADAR_API_TOKEN`.
-
-## Local backend test
-
-```bash
-cd backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
-```
-
-Then set extension backend URL to:
+Then set backend URL:
 
 ```txt
-http://127.0.0.1:5000/api/evaluate
+https://your-render-app.onrender.com/api/evaluate
 ```
 
-## Test endpoint
+## Debug
+
+Test this:
+
+```txt
+https://your-render-app.onrender.com/api/test-fetch?title=RTX%203060%20Ti&price=320
+```
+
+With token:
 
 ```bash
-curl -X POST http://127.0.0.1:5000/api/evaluate ^
-  -H "Content-Type: application/json" ^
-  -d "{\"listing\":{\"title\":\"RTX 3080 Ti\",\"priceValue\":360,\"description\":\"como nova\",\"url\":\"https://olx.pt/test\"}}"
+curl "https://your-render-app.onrender.com/api/test-fetch?title=RTX%203060%20Ti&price=320" ^
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
+
+Expected behavior:
+
+- If fewer than 3 used comps are found: `UNKNOWN`.
+- No fake `18 500 €` median.
+- Sources can still show `blocked`/`empty`, but they should not poison the verdict.
